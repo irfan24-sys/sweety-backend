@@ -1,5 +1,7 @@
 
 import Reading from "../models/Reading.js";
+import User from "../models/User.js";
+import Notification from "../models/Notification.js";
 import mongoose from "mongoose";
 
 // Get today's date in Indian timezone
@@ -14,12 +16,16 @@ const getToday = () => {
 
 // Validate date format
 const isValidDate = (date) => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return false;
+  }
 
   const parsed = new Date(`${date}T00:00:00.000Z`);
 
-  return !Number.isNaN(parsed.getTime()) &&
-    parsed.toISOString().slice(0, 10) === date;
+  return (
+    !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === date
+  );
 };
 
 // Validate reading data
@@ -55,12 +61,64 @@ const validateReading = ({ date, time, slot, value, notes }) => {
     return "Glucose value must be a whole number between 40 and 600";
   }
 
-  if (notes !== undefined &&
-      (typeof notes !== "string" || notes.length > 500)) {
+  if (
+    notes !== undefined &&
+    (typeof notes !== "string" || notes.length > 500)
+  ) {
     return "Notes must be text with a maximum of 500 characters";
   }
 
   return null;
+};
+
+// CREATE ALERT WHEN GLUCOSE IS OUTSIDE CONFIGURED LIMITS
+const createGlucoseNotification = async (reading) => {
+  try {
+    const user = await User.findById(reading.userId);
+
+    if (!user) return;
+
+    const settings = user.glucoseSettings || {};
+
+    const urgentLow = Number(settings.urgentLow ?? 70);
+    const highThreshold = Number(settings.highThreshold ?? 180);
+
+    let notification = null;
+
+    if (reading.value < urgentLow) {
+      notification = {
+        userId: reading.userId,
+        readingId: reading._id,
+        type: "low",
+        title: "Low glucose reading detected",
+        message: `Your glucose reading is ${reading.value} mg/dL, below your configured low threshold of ${urgentLow} mg/dL.`,
+        value: reading.value,
+        date: reading.date,
+        time: reading.time,
+        slot: reading.slot,
+      };
+    } else if (reading.value > highThreshold) {
+      notification = {
+        userId: reading.userId,
+        readingId: reading._id,
+        type: "high",
+        title: "High glucose reading detected",
+        message: `Your glucose reading is ${reading.value} mg/dL, above your configured high threshold of ${highThreshold} mg/dL.`,
+        value: reading.value,
+        date: reading.date,
+        time: reading.time,
+        slot: reading.slot,
+      };
+    }
+
+    if (notification) {
+      await Notification.create(notification);
+      console.log("Glucose notification created successfully");
+    }
+  } catch (error) {
+    // Do not undo a saved reading if notification creation fails.
+    console.error("Glucose notification error:", error);
+  }
 };
 
 // ADD READING
@@ -69,7 +127,11 @@ export const addReading = async (req, res) => {
     const { date, time, slot, value, notes = "" } = req.body;
 
     const validationError = validateReading({
-      date, time, slot, value, notes,
+      date,
+      time,
+      slot,
+      value,
+      notes,
     });
 
     if (validationError) {
@@ -100,12 +162,14 @@ export const addReading = async (req, res) => {
       notes,
     });
 
+    // Check glucose value and create notification if necessary
+    await createGlucoseNotification(reading);
+
     return res.status(201).json({
       success: true,
       message: "Reading added successfully",
       reading,
     });
-
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({
@@ -135,8 +199,9 @@ export const getReadings = async (req, res) => {
       count: readings.length,
       readings,
     });
-
   } catch (error) {
+    console.error("Get Readings Error:", error);
+
     return res.status(500).json({
       success: false,
       message: "Failed to fetch readings",
@@ -172,8 +237,9 @@ export const getReading = async (req, res) => {
       success: true,
       reading,
     });
-
   } catch (error) {
+    console.error("Get Single Reading Error:", error);
+
     return res.status(500).json({
       success: false,
       message: "Failed to fetch reading",
@@ -204,6 +270,8 @@ export const updateReading = async (req, res) => {
         message: "Reading not found",
       });
     }
+
+    const previousValue = reading.value;
 
     const updatedData = {
       date: req.body.date ?? reading.date,
@@ -239,12 +307,16 @@ export const updateReading = async (req, res) => {
 
     await reading.save();
 
+    // Create an alert only when the glucose value has changed
+    if (previousValue !== reading.value) {
+      await createGlucoseNotification(reading);
+    }
+
     return res.status(200).json({
       success: true,
       message: "Reading updated successfully",
       reading,
     });
-
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({
@@ -252,6 +324,8 @@ export const updateReading = async (req, res) => {
         message: "Reading already exists for this date and slot",
       });
     }
+
+    console.error("Update Reading Error:", error);
 
     return res.status(500).json({
       success: false,
@@ -288,8 +362,9 @@ export const deleteReading = async (req, res) => {
       success: true,
       message: "Reading deleted successfully",
     });
-
   } catch (error) {
+    console.error("Delete Reading Error:", error);
+
     return res.status(500).json({
       success: false,
       message: "Failed to delete reading",
