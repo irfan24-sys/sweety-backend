@@ -1,3 +1,4 @@
+
 import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
@@ -21,10 +22,31 @@ const userSchema = new mongoose.Schema(
       required: true,
     },
 
+    phone: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    dob: {
+      type: Date,
+      default: null,
+    },
+
+    sex: {
+      type: String,
+      default: "Not specified",
+    },
+
     diabetesType: {
       type: String,
       enum: ["Type 1", "Type 2", "Gestational / Pre"],
       required: true,
+    },
+
+    profileImage: {
+      type: String,
+      default: "",
     },
   },
   { timestamps: true }

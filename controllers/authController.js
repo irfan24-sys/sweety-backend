@@ -3,9 +3,7 @@ import User from "../models/User.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
-// ==========================================
-// GENERATE JWT TOKEN
-// ==========================================
+// Generate JWT token
 const generateToken = (userId) => {
   if (!process.env.JWT_SECRET) {
     throw new Error("JWT_SECRET is not configured");
@@ -18,30 +16,43 @@ const generateToken = (userId) => {
   );
 };
 
-// ==========================================
+// Return safe patient details
+const formatUser = (user) => ({
+  id: user._id,
+  name: user.name,
+  email: user.email,
+  phone: user.phone || "",
+  dob: user.dob || null,
+  sex: user.sex || "Not specified",
+  diabetesType: user.diabetesType,
+  profileImage: user.profileImage || "",
+});
+
 // USER SIGNUP
-// ==========================================
 export const signup = async (req, res) => {
   try {
-    const { name, email, password, diabetesType } = req.body;
+    const {
+      name,
+      email,
+      password,
+      phone,
+      dob,
+      sex,
+      diabetesType,
+    } = req.body;
 
-    // Validate required fields
-    if (
-      !name?.trim() ||
-      !email?.trim() ||
-      !password ||
-      !diabetesType
-    ) {
+    // Required fields
+    if (!name?.trim() || !email?.trim() || !password || !diabetesType) {
       return res.status(400).json({
         success: false,
-        message: "All fields are required",
+        message: "Please provide all required fields",
       });
     }
 
     // Normalize email
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Validate email format
+    // Email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
     if (!emailRegex.test(normalizedEmail)) {
@@ -51,34 +62,61 @@ export const signup = async (req, res) => {
       });
     }
 
-    // Validate password
-    if (password.length < 8) {
+    // Password validation
+    const passwordRegex =
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
+
+    if (!passwordRegex.test(password)) {
       return res.status(400).json({
         success: false,
-        message: "Password must contain at least 8 characters",
+        message:
+          "Password must contain at least 8 characters, uppercase, lowercase, number and special character",
       });
     }
 
-    // Validate diabetes type against User schema
+    // Diabetes type validation
     const allowedDiabetesTypes = [
       "Type 1",
       "Type 2",
       "Gestational / Pre",
-      "Type 1 Diabetes",
-      "Type 2 Diabetes",
-      "Gestational Diabetes",
-      "Pre-diabetes",
-      "Other",
     ];
 
     if (!allowedDiabetesTypes.includes(diabetesType)) {
       return res.status(400).json({
         success: false,
-        message: "Please select a valid diabetes classification",
+        message: "Invalid diabetes classification",
       });
     }
 
-    // Check whether email already exists
+    // Validate phone if provided
+    if (
+      phone &&
+      !/^[+]?[0-9\s()-]{7,15}$/.test(phone.trim())
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid phone number",
+      });
+    }
+
+    // Validate DOB if provided
+    let parsedDob = null;
+
+    if (dob) {
+      parsedDob = new Date(dob);
+
+      if (
+        Number.isNaN(parsedDob.getTime()) ||
+        parsedDob > new Date()
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Please enter a valid date of birth",
+        });
+      }
+    }
+
+    // Check existing email
     const existingUser = await User.findOne({
       email: normalizedEmail,
     });
@@ -93,45 +131,30 @@ export const signup = async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Create new user
+    // Save complete patient information
     const user = await User.create({
       name: name.trim(),
       email: normalizedEmail,
       password: hashedPassword,
+      phone: phone?.trim() || "",
+      dob: parsedDob,
+      sex: sex?.trim() || "Not specified",
       diabetesType,
     });
 
-    // Generate authentication token
+    // Generate token
     const token = generateToken(user._id);
 
-    // Send success response
     return res.status(201).json({
       success: true,
       message: "Account created successfully",
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        diabetesType: user.diabetesType,
-        phone: user.phone,
-        dob: user.dob,
-        sex: user.sex,
-        profileImage: user.profileImage,
-        doctorName: user.doctorName,
-        doctorPhone: user.doctorPhone,
-        emergencyName: user.emergencyName,
-        emergencyPhone: user.emergencyPhone,
-        specialists: user.specialists,
-        glucoseSettings: user.glucoseSettings,
-        preferences: user.preferences,
-      },
+      user: formatUser(user),
     });
 
   } catch (error) {
     console.error("Signup Error:", error);
 
-    // Duplicate email handling
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
@@ -139,7 +162,6 @@ export const signup = async (req, res) => {
       });
     }
 
-    // Mongoose validation handling
     if (error.name === "ValidationError") {
       return res.status(400).json({
         success: false,
@@ -154,14 +176,11 @@ export const signup = async (req, res) => {
   }
 };
 
-// ==========================================
 // USER LOGIN
-// ==========================================
 export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Validate required fields
     if (!email?.trim() || !password) {
       return res.status(400).json({
         success: false,
@@ -169,10 +188,8 @@ export const login = async (req, res) => {
       });
     }
 
-    // Normalize email
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Find user
     const user = await User.findOne({
       email: normalizedEmail,
     });
@@ -184,7 +201,6 @@ export const login = async (req, res) => {
       });
     }
 
-    // Compare password
     const isPasswordValid = await bcrypt.compare(
       password,
       user.password
@@ -197,31 +213,13 @@ export const login = async (req, res) => {
       });
     }
 
-    // Generate authentication token
     const token = generateToken(user._id);
 
-    // Send success response
     return res.status(200).json({
       success: true,
       message: "Login successful",
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        diabetesType: user.diabetesType,
-        phone: user.phone,
-        dob: user.dob,
-        sex: user.sex,
-        profileImage: user.profileImage,
-        doctorName: user.doctorName,
-        doctorPhone: user.doctorPhone,
-        emergencyName: user.emergencyName,
-        emergencyPhone: user.emergencyPhone,
-        specialists: user.specialists,
-        glucoseSettings: user.glucoseSettings,
-        preferences: user.preferences,
-      },
+      user: formatUser(user),
     });
 
   } catch (error) {
